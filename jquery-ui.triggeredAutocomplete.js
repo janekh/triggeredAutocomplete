@@ -2,8 +2,9 @@
 /*
  * triggeredAutocomplete (jQuery UI autocomplete widget)
  * 2012 by Hawkee.com (hawkee@gmail.com)
+ * 2015 by Janek Hiis (janek@weekdone.com)
  *
- * Version 1.4.5
+ * Version 1.5
  * 
  * Requires jQuery 1.7 and jQuery UI 1.8
  *
@@ -30,8 +31,9 @@
 			this.stopLength = -1;
 			this.contents = '';
 			this.cursorPos = 0;
-			
-			/** Fixes some events improperly handled by ui.autocomplete */
+			this.last_index = -1;
+
+			// Fixes some events improperly handled by ui.autocomplete
 			this.element.bind('keydown.autocomplete.fix', function (e) {
 				switch (e.keyCode) {
 					case $.ui.keyCode.ESCAPE:
@@ -49,7 +51,7 @@
 			// Check for the id_map as an attribute.  This is for editing.
 
 			var id_map_string = this.element.attr('id_map');
-			if(id_map_string) this.id_map = jQuery.parseJSON(id_map_string);
+			if (id_map_string) this.id_map = jQuery.parseJSON(id_map_string);
 
 			this.ac = $.ui.autocomplete.prototype;
 			this.ac._create.apply(this, arguments);
@@ -67,20 +69,20 @@
 				// Rebuild: start + result + end
 
 				var end = contents.substring(cursorPos, contents.length);
-				var start = contents.substring(0, cursorPos);
-				start = start.substring(0, start.lastIndexOf(self.options.trigger));
+				var start = contents.substring(0, self.last_index);
+				var trigger = start.slice(-1);
 
 				var top = self.element.scrollTop();
-				this.value = start + self.options.trigger+ui.item.label+' ' + end;
+				this.value = start + ui.item.label + ' ' + end;
 				self.element.scrollTop(top);
 
 				// Create an id map so we can create a hidden version of this string with id's instead of labels.
 
-				self.id_map[ui.item.label] = ui.item.value;
+				self.id_map[trigger + ui.item.label] = ui.item.value;
 				self.updateHidden();
 
-				/** Places the caret right after the inserted item. */
-				var index = start.length + self.options.trigger.length + ui.item.label.length + 2;
+				// Places the caret right after the inserted item.
+				var index = start.length + ui.item.label.length + 2;
 				if (this.createTextRange) {
 					var range = this.createTextRange();
 					range.move('character', index);
@@ -140,32 +142,27 @@
 			this.contents = contents;
 			this.cursorPos = cursorPos;
 
-			// Include the character before the trigger and check that the trigger is not in the middle of a word
+			// Check that the trigger is not in the middle of a word
 			// This avoids trying to match in the middle of email addresses when '@' is used as the trigger
 
-			var check_contents = contents.substring(contents.lastIndexOf(this.options.trigger) - 1, cursorPos);
-			var regex = new RegExp('\\B\\'+this.options.trigger+'([\\w\\-]+)');
+			var regex = new RegExp("(^|\\s)([" + this.options.trigger + "][\\w-]*)$");
+			var result = regex.exec(contents.substring(0, cursorPos));
 
-			if (contents.indexOf(this.options.trigger) >= 0 && check_contents.match(regex)) {
-
-				// Get the characters following the trigger and before the cursor position.
-				// Get the contents up to the cursortPos first then get the lastIndexOf the trigger to find the search term.
-
-				contents = contents.substring(0, cursorPos);
-				var term = contents.substring(contents.lastIndexOf(this.options.trigger) + 1, contents.length);
-
+			if(result && result[2]) {
 				// Only query the server if we have a term and we haven't received a null response.
 				// First check the current query to see if it already returned a null response.
+                                var term = result[2];
 
-				if(this.stopIndex == contents.lastIndexOf(this.options.trigger) && term.length > this.stopLength) { term = ''; }
-			
+				if (this.stopIndex == result.index && term.length > this.stopLength) { term = ''; }
+
 				if (term.length > 0 && (!this.options.maxLength || term.length <= this.options.maxLength)) {
 					// Updates the hidden field to check if a name was removed so that we can put them back in the list.
 					this.updateHidden();
+					this.last_index = result.index + result[1].length + 1;
 					return this._search(term);
 				}
-				else this.close();
 			}	
+			this.close();
 		},
 
 		// Slightly altered the default ajax call to stop querying after the search produced no results.
@@ -184,12 +181,14 @@
 					if ( self.xhr ) {
 						self.xhr.abort();
 					}
+					request.trigger = request.term.substring(0, 1);
+					request.term = request.term.substring(1);
 					self.xhr = $.ajax({
 						url: url,
 						data: request,
 						dataType: 'json',
 						success: function(data) {
-							if(data != null) {
+							if(data.length) {
 								response($.map(data, function(item) {
 									if (typeof item === "string") {
 										label = item;
@@ -208,7 +207,7 @@
 							else {
 								// No results, record length of string and stop querying unless the length decreases
 								self.stopLength = request.term.length;
-								self.stopIndex = self.contents.lastIndexOf(self.options.trigger);
+								self.stopIndex = self.contents.lastIndexOf(request.term);
 								self.close();
 							}
 						}
@@ -247,18 +246,22 @@
 		// ID's instead of usernames.  Better for storage.
 
 		updateHidden: function() {
-			var trigger = this.options.trigger;
-			var top = this.element.scrollTop();
 			var contents = this.element.val();
+			var top = this.element.scrollTop();
+
 			for(var key in this.id_map) {
-				var find = trigger+key;
+				var old_contents = contents;
+				var find = key;
+				var trigger = key.substring(0,1);
+
 				find = find.replace(/[^a-zA-Z 0-9@]+/g,'\\$&');
 				var regex = new RegExp(find, "g");
-				var old_contents = contents;
+
 				contents = contents.replace(regex, trigger+'['+this.id_map[key]+']');
-				if(old_contents == contents) delete this.id_map[key];
+				if (old_contents == contents) delete this.id_map[key];
 			}
-			$(this.options.hidden).val(contents);
+			if (this.options.hidden != undefined)
+				$(this.options.hidden).val(contents);
 			this.element.scrollTop(top);
 		}
 
